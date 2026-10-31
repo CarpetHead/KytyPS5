@@ -267,11 +267,12 @@ if (!$environment.Contains('KYTY_RECORDING_CPUS')) { $environment['KYTY_RECORDIN
 if (!$environment.Contains('KYTY_RENDER_CPUS')) { $environment['KYTY_RENDER_CPUS'] = $environment['KYTY_RECORDING_CPUS'] }
 # The emulator's mimalloc heap (src/main.cpp) on 2 MiB pages: fewer page walks on the render thread (stone arch, 2 boots
 # each: 54.7 -> 55.9 fps). 5 GiB of them reserved at the start (large pages cannot be paged out, so only with 32 GB of
-# RAM or more): mimalloc otherwise took more large pages mid-game (~30 ms frames). Freed memory kept, not returned to
-# Windows (each return interrupts every core). Read when the process starts, so set here; without the "Lock pages in
-# memory" right mimalloc keeps 4 KiB pages. Inherited values win (MIMALLOC_ALLOW_LARGE_OS_PAGES=0 turns it off).
+# RAM or more): mimalloc otherwise took more large pages mid-game (~30 ms frames). (Never returning freed memory,
+# MIMALLOC_PURGE_DELAY=-1, raised the emulator's private memory from ~22 to ~36 GB: left at mimalloc's default.) Read when
+# the process starts, so set here; without the "Lock pages in memory" right mimalloc keeps 4 KiB pages. Inherited values
+# win (MIMALLOC_ALLOW_LARGE_OS_PAGES=0 turns it off).
 if ((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory -ge 31GB) {
-	foreach ($pair in @(('MIMALLOC_ALLOW_LARGE_OS_PAGES', '1'), ('MIMALLOC_RESERVE_OS_MEMORY', '4GiB'), ('MIMALLOC_PURGE_DELAY', '-1'))) {
+	foreach ($pair in @(('MIMALLOC_ALLOW_LARGE_OS_PAGES', '1'), ('MIMALLOC_RESERVE_OS_MEMORY', '4GiB'))) {
 		if (!$environment.Contains($pair[0]) -and ![Environment]::GetEnvironmentVariable($pair[0])) { $environment[$pair[0]] = $pair[1] }
 	}
 }
