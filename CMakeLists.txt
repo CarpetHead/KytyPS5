@@ -178,6 +178,19 @@ endif()
 
 option(KYTY_BUILD_LAUNCHER "Build Qt launcher" ON)
 
+# Windows: the emulator's operator new/delete from mimalloc instead of the CRT heap (src/main.cpp; KYTY_MIMALLOC=0 at
+# run time keeps the CRT heap; run-windows.ps1 puts its arenas on 2 MiB pages where it can). As dekuni's fork (+1.4-2.5%
+# there); stone arch here, 2 boots each: 53.4 -> 55.9 fps with the large pages. (Linux: preload libmimalloc.so instead.)
+if(WIN32)
+	set(kyty_mimalloc_default ON)
+else()
+	set(kyty_mimalloc_default OFF)
+endif()
+option(KYTY_MIMALLOC "Windows: operator new/delete from mimalloc (fetched, v2.5.2)" ${kyty_mimalloc_default})
+if(KYTY_MIMALLOC AND NOT WIN32)
+	message(FATAL_ERROR "KYTY_MIMALLOC is Windows-only (src/main.cpp); on Linux preload libmimalloc.so")
+endif()
+
 # A build for the Steam Deck (tools/local/deck/build-deck.sh: -march=znver2, Linux): KYTY_STEAM_DECK=1 in the code
 # selects its defaults and code paths: four Zen 2 cores, an RDNA 2 GPU of 8 compute units, 16 GB of memory the two
 # share.
@@ -917,6 +930,12 @@ if(LINUX)
 endif()
 
 target_link_libraries(kyty_emulator ${kyty_emulator_link_libraries})
+if(KYTY_MIMALLOC)
+	# main.cpp replaces operator new/delete for this executable only. (Redirecting every module's malloc as well,
+	# mimalloc.dll + mimalloc-redirect.dll, measured no faster: stone arch 55.8-56.2 fps on, 55.9-57.1 off.)
+	target_link_libraries(kyty_emulator mimalloc-static)
+	set_property(SOURCE "${KYTY_SOURCE_DIR}/main.cpp" APPEND PROPERTY COMPILE_DEFINITIONS KYTY_MIMALLOC=1)
+endif()
 if (WIN32)
 	target_link_libraries(kyty_emulator opengl32)
 	target_link_libraries(kyty_emulator iphlpapi)

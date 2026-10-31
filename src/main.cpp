@@ -17,6 +17,72 @@
 #include <cstdlib>
 #include <fmt/format.h>
 
+#if defined(KYTY_MIMALLOC)
+#include <malloc.h>
+#include <mimalloc.h>
+#include <new>
+
+// The executable's operator new/delete (this translation unit only): mimalloc's, or with KYTY_MIMALLOC=0 the CRT
+// heap's, chosen at the first allocation and kept for the process (a block is always freed by the heap that made it).
+// Stone arch, 120 Hz, 2 boots each: CRT 53.4 fps, mimalloc 54.7, mimalloc on 2 MiB pages (MIMALLOC_ALLOW_LARGE_OS_PAGES,
+// run-windows.ps1's default) 55.9: the render thread's ~3.5K allocations and frees a frame cost less, and its data
+// fewer page walks.
+static bool KytyMimalloc() noexcept {
+	static const bool use = [] {
+		const char* value = std::getenv("KYTY_MIMALLOC");
+		return value == nullptr || value[0] != '0';
+	}();
+	return use;
+}
+static void* KytyAlloc(std::size_t size) noexcept {
+	return KytyMimalloc() ? mi_malloc(size) : std::malloc(size == 0 ? 1 : size);
+}
+static void* KytyAllocAligned(std::size_t size, std::align_val_t align) noexcept {
+	return KytyMimalloc() ? mi_malloc_aligned(size, static_cast<std::size_t>(align))
+	                      : _aligned_malloc(size == 0 ? 1 : size, static_cast<std::size_t>(align));
+}
+static void KytyFree(void* p) noexcept {
+	if (KytyMimalloc()) mi_free(p); else std::free(p);
+}
+static void KytyFreeAligned(void* p) noexcept {
+	if (KytyMimalloc()) mi_free(p); else _aligned_free(p);
+}
+// (Built without exceptions: an allocation that fails ends the process, as an uncaught std::bad_alloc would.)
+static void* KytyNew(std::size_t size) {
+	if (void* p = KytyAlloc(size)) return p;
+	std::abort();
+}
+static void* KytyNewAligned(std::size_t size, std::align_val_t align) {
+	if (void* p = KytyAllocAligned(size, align)) return p;
+	std::abort();
+}
+
+void* operator new(std::size_t size) { return KytyNew(size); }
+void* operator new[](std::size_t size) { return KytyNew(size); }
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept { return KytyAlloc(size); }
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept { return KytyAlloc(size); }
+void* operator new(std::size_t size, std::align_val_t align) { return KytyNewAligned(size, align); }
+void* operator new[](std::size_t size, std::align_val_t align) { return KytyNewAligned(size, align); }
+void* operator new(std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
+	return KytyAllocAligned(size, align);
+}
+void* operator new[](std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
+	return KytyAllocAligned(size, align);
+}
+void operator delete(void* p) noexcept { KytyFree(p); }
+void operator delete[](void* p) noexcept { KytyFree(p); }
+void operator delete(void* p, std::size_t) noexcept { KytyFree(p); }
+void operator delete[](void* p, std::size_t) noexcept { KytyFree(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { KytyFree(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { KytyFree(p); }
+void operator delete(void* p, std::align_val_t) noexcept { KytyFreeAligned(p); }
+void operator delete[](void* p, std::align_val_t) noexcept { KytyFreeAligned(p); }
+void operator delete(void* p, std::size_t, std::align_val_t) noexcept { KytyFreeAligned(p); }
+void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { KytyFreeAligned(p); }
+void operator delete(void* p, std::align_val_t, const std::nothrow_t&) noexcept { KytyFreeAligned(p); }
+void operator delete[](void* p, std::align_val_t, const std::nothrow_t&) noexcept { KytyFreeAligned(p); }
+#endif
+
 using namespace Common;
 using namespace Emulator;
 

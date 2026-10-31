@@ -66,6 +66,24 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(opus)
 
+# KYTY_MIMALLOC: the emulator's operator new/delete (src/main.cpp) from mimalloc instead of the CRT heap.
+if(KYTY_MIMALLOC)
+	set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+	set(MI_BUILD_STATIC ON CACHE BOOL "" FORCE)
+	set(MI_OVERRIDE OFF CACHE BOOL "" FORCE)
+	set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
+	set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+	FetchContent_Declare(
+		mimalloc
+		GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
+		GIT_TAG 2406cc5f3ab6d6e54fe560cdd66fa46eee775312 # v2.5.2
+		GIT_SHALLOW FALSE
+	)
+	FetchContent_MakeAvailable(mimalloc)
+	# SPIRV-Tools would add mimalloc a second time.
+	set(SPIRV_TOOLS_USE_MIMALLOC OFF CACHE BOOL "" FORCE)
+endif()
+
 add_library(zarchive STATIC
 	"${zarchive_source_SOURCE_DIR}/src/zarchivereader.cpp"
 	"${zarchive_source_SOURCE_DIR}/src/zarchivewriter.cpp"
