@@ -84,6 +84,9 @@ constexpr uint32_t NormalizeRegisterOffset(uint32_t raw_offset) {
 // read before its first download is all zeros (an "unknown register 0" crash at startup).
 // False when a speculative translation refused it (speculation-state.h): the packet applies nothing.
 [[nodiscard]] bool SyncCommandMemory(uint64_t address, uint64_t bytes, const char* what) {
+	// (A state pass syncs nothing off the GPU thread, and reads the table in a guarded copy, GuardTable: ~18% of the pass
+	// went here per table, the counters it shares with the GPU thread among it.)
+	if (Spec::t_record != nullptr) return true;
 	LiveCounters::Add(LiveCounters::IndirectTables);
 	LiveCensus::Scope census(LiveCensus::CommandSync, 0, 0);
 	if (!Libs::LibKernel::Memory::SyncGpuCleanBacking(address, bytes)) {
