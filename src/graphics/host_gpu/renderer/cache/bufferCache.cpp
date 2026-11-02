@@ -2550,6 +2550,25 @@ void BufferCache::EnsureBufferContents(uint64_t vaddr, uint64_t size) {
 	(void)SynchronizeBuffer(buffer, vaddr, size, false, false);
 }
 
+void BufferCache::EnsureTexelContents(uint64_t vaddr, uint64_t size) {
+	EXIT_IF(Spec::Current() != nullptr);
+	// (As ObtainBuffer's for a texel buffer read.)
+	DrainGuestReadback(vaddr, size, false, false);
+	const auto id     = FindBuffer(vaddr, size);
+	auto&      buffer = m_slot_buffers[id];
+	TouchBuffer(buffer);
+	(void)SynchronizeBuffer(buffer, vaddr, size, false, true);
+}
+
+// KYTY_SPECULATE_TEXEL_SYNC (live speculate_texel_sync, default off): ObtainBuffer's texel buffers over GPU-written images.
+static bool TexelSync() {
+	static auto& on = LiveSwitch::Find("speculate_texel_sync", [] {
+		const char* value = std::getenv("KYTY_SPECULATE_TEXEL_SYNC");
+		return value != nullptr ? std::atoll(value) : 0ll;
+	}());
+	return on.load(std::memory_order_relaxed) != 0;
+}
+
 StreamBuffer& BufferCache::GetShaderUploadBuffer() noexcept {
 	if (const auto* spec = Spec::Current(); spec != nullptr && spec->shader_upload != nullptr) return *spec->shader_upload;
 	return kyty_local_stream_upload_mode.load(std::memory_order_relaxed) != 0 ? m_host_shader_upload
@@ -2583,9 +2602,17 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBuffer(uint64_t vaddr, uint64_t 
 		// obtains again before the work (a range it reads made current, one it writes made GPU-owned).
 		const auto* owner  = m_page_table.Find(vaddr >> PageTable::kPageBits);
 		auto*       buffer = owner != nullptr && *owner ? m_slot_buffers.try_get(*owner) : nullptr;
-		if (buffer == nullptr || buffer->is_deleted || !buffer->IsInBounds(vaddr, size) ||
-		    (is_texel_buffer && m_texture_cache.HasGpuWrittenImageOverlap(vaddr, size)))
+		if (buffer == nullptr || buffer->is_deleted || !buffer->IsInBounds(vaddr, size))
 			return Spec::Refuse("buffer lookup"), std::pair<Buffer*, uint64_t> {nullptr, 0};
+		// A texel buffer over an image GPU work wrote: the normal path copies the image in at the draw. Its commit does that
+		// before its work (KYTY_SPECULATE_TEXEL_SYNC) when its work does not use the image itself, nor writes the buffer;
+		// else the draw is a hole. (Storage and target images over memory the game reads as texel buffers: 160-360 such
+		// holes a frame in the slow-mode boots, ~0.4 ms of the GPU thread and as many segments, 2 Nov.)
+		if (is_texel_buffer && m_texture_cache.HasGpuWrittenImageOverlap(vaddr, size)) {
+			if (is_written || !TexelSync() || m_texture_cache.SpeculationUsesGpuWrittenImage(vaddr, size))
+				return Spec::Refuse("buffer lookup"), std::pair<Buffer*, uint64_t> {nullptr, 0};
+			spec->NoteTexelSync(vaddr, size);
+		}
 		// (An earlier segment's guest memory writes are made before its work, the open segment's after it, and its
 		// copies read their sources then.)
 		if (spec->open_journal_set.Intersects(vaddr, size) || (is_written && spec->open_copy_sources.Intersects(vaddr, size)))
