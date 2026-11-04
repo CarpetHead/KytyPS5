@@ -2185,8 +2185,10 @@ RenderExecutor::TableResult RenderExecutor::TableDraw(CommandBuffer& buffer, Tab
 	phase.emplace(LiveCensus::DrawPhase, 0x7ab1e, 3);
 	// Emission, as NativeXprEmit's: indices and arguments are read by the GPU; lookups may restart the
 	// scheduler, so the command buffer handle is taken after them.
-	auto&              buffer_cache = m_context.GetBufferCache();
-	constexpr uint64_t stride       = sizeof(vk::DrawIndexedIndirectCommand);
+	auto& buffer_cache = m_context.GetBufferCache();
+	// (KYTY_SPEC_DRAW_INDIRECT: a draw of vertices of arguments the GPU reads, VkDrawIndirectCommand; obtained as a run's.)
+	const bool     vertex_arguments = direct != nullptr && direct->indirect;
+	const uint64_t stride = vertex_arguments ? sizeof(vk::DrawIndirectCommand) : sizeof(vk::DrawIndexedIndirectCommand);
 	// A tracker region's epoch, read once in the draw (its buffers mostly share one: the line is another core's).
 	std::array<std::pair<uint64_t, uint64_t>, 4> region_epochs;
 	region_epochs.fill({UINT64_MAX, 0});
@@ -2366,7 +2368,7 @@ RenderExecutor::TableResult RenderExecutor::TableDraw(CommandBuffer& buffer, Tab
 		                        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
 		                        push_dwords * sizeof(uint32_t), push_data.dwords.data());
 	if (!same_index) vk_buffer.bindIndexBuffer(indices.first->Handle(), indices.second, index_type);
-	if (direct != nullptr) {
+	if (direct != nullptr && !vertex_arguments) {
 		// This draw's offsets, as the normal path's ResolveVertexOffset/ResolveInstanceOffset give them: the index
 		// offset register, else (a vertex program that fetches) the user data its fetch adds.
 		const auto& vertex = *pair.programs[0];
@@ -2384,9 +2386,16 @@ RenderExecutor::TableResult RenderExecutor::TableDraw(CommandBuffer& buffer, Tab
 		else
 			vk_buffer.draw(direct->index_count, direct->instance_count, vertex_offset, first_instance);
 	}
-	for (uint32_t group = 0; group < groups; ++group)
-		vk_buffer.drawIndexedIndirect(arguments[group].first->Handle(), arguments[group].second, group_sizes[group],
-		                              static_cast<uint32_t>(stride));
+	// (A draw of vertices of GPU-read arguments: their first vertex and instance from them, as the normal path's
+	// DrawAuto with gpu_args gives them (DrawOffsetSource::IndirectArgs), not from the index offset or user data.)
+	for (uint32_t group = 0; group < groups; ++group) {
+		if (vertex_arguments)
+			vk_buffer.drawIndirect(arguments[group].first->Handle(), arguments[group].second, group_sizes[group],
+			                       static_cast<uint32_t>(stride));
+		else
+			vk_buffer.drawIndexedIndirect(arguments[group].first->Handle(), arguments[group].second, group_sizes[group],
+			                              static_cast<uint32_t>(stride));
+	}
 	// As the normal path's: shaders that write buffers end the rendering, and a barrier orders their writes.
 	if (writes) {
 		m_context.GetCommandScheduler().EndRendering();
@@ -2406,6 +2415,15 @@ RenderExecutor::TableResult RenderExecutor::TableDraw(CommandBuffer& buffer, Tab
 	table.last_state   = &draw_state;
 	table.last_set     = set;
 	table.images_epoch = texture_cache.ImagesEpoch();
+	if (vertex_arguments && groups != 0) { // (KYTY_SPEC_DRAW_INDIRECT_VERIFY: what it read)
+		auto&       noted  = m_table_args_emit;
+		const auto* source = arguments[0].first;
+		const auto  mapped = source->Mapped();
+		noted              = {source, arguments[0].second, static_cast<uint32_t>(stride), group_sizes[0]};
+		// (A ring's copy: no game buffer (those are at their guest address), host-visible.)
+		noted.copy = source->CpuAddress() == 0 && mapped.size() >= arguments[0].second + sizeof(noted.copied);
+		if (noted.copy) std::memcpy(noted.copied.data(), mapped.data() + arguments[0].second, sizeof(noted.copied));
+	}
 	LiveCounters::Add(LiveCounters::TableDraws, std::max<size_t>(commands.size(), 1));
 	return TableResult::Drawn;
 }
